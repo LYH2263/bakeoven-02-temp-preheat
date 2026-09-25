@@ -7,14 +7,24 @@ class ProductOut(BaseModel):
     name: str
     ferment_min: int
     bake_min: int
+    temp_profile: str
     model_config = {"from_attributes": True}
+
+
+class ProductUpdate(BaseModel):
+    temp_profile: str = Field(min_length=1, max_length=20)
 
 
 class OvenOut(BaseModel):
     id: int
     label: str
     capacity_note: str
+    preheat_min: int
     model_config = {"from_attributes": True}
+
+
+class OvenUpdate(BaseModel):
+    preheat_min: int = Field(ge=0, le=240)
 
 
 class BatchOut(BaseModel):
@@ -26,6 +36,8 @@ class BatchOut(BaseModel):
     status: str
     product_name: str | None = None
     oven_label: str | None = None
+    temp_profile: str | None = None
+    preheat_min: int = 0
     ferment_end: int | None = None
     bake_end: int | None = None
     model_config = {"from_attributes": True}

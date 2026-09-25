@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 @dataclass(frozen=True)
 class Interval:
     start: int  # minutes from day origin
@@ -28,8 +27,17 @@ class RecipeDurations:
 class Occupancy:
     oven_id: int
     interval: Interval
-    phase: str  # ferment | bake
+    phase: str  # preheat | ferment | bake
     batch_id: int
+
+
+def required_preheat_min(prev_profile: str | None, profile: str, oven_preheat_min: int) -> int:
+    """Preheat is needed only when the immediately previous profile on the
+    oven differs from the new batch's profile. No previous batch (or a
+    zero-length oven preheat setting) means no preheat segment."""
+    if not prev_profile or prev_profile == profile or oven_preheat_min <= 0:
+        return 0
+    return oven_preheat_min
 
 
 def build_occupancies(
@@ -37,13 +45,20 @@ def build_occupancies(
     batch_id: int,
     start_min: int,
     recipe: RecipeDurations,
+    preheat_min: int = 0,
 ) -> list[Occupancy]:
+    out: list[Occupancy] = []
+    if preheat_min > 0:
+        out.append(Occupancy(oven_id, Interval(start_min - preheat_min, start_min), "preheat", batch_id))
     ferment = Interval(start_min, start_min + recipe.ferment_min)
     bake = Interval(ferment.end, ferment.end + recipe.bake_min)
-    return [
-        Occupancy(oven_id, ferment, "ferment", batch_id),
-        Occupancy(oven_id, bake, "bake", batch_id),
-    ]
+    out.extend(
+        [
+            Occupancy(oven_id, ferment, "ferment", batch_id),
+            Occupancy(oven_id, bake, "bake", batch_id),
+        ]
+    )
+    return out
 
 
 def find_conflicts(existing: list[Occupancy], candidates: list[Occupancy]) -> list[tuple[Occupancy, Occupancy]]:
