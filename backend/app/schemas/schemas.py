@@ -7,14 +7,24 @@ class ProductOut(BaseModel):
     name: str
     ferment_min: int
     bake_min: int
+    temp_tier: str
     model_config = {"from_attributes": True}
+
+
+class ProductUpdate(BaseModel):
+    temp_tier: str | None = Field(default=None, min_length=1, max_length=20)
 
 
 class OvenOut(BaseModel):
     id: int
     label: str
     capacity_note: str
+    preheat_min: int
     model_config = {"from_attributes": True}
+
+
+class OvenUpdate(BaseModel):
+    preheat_min: int | None = Field(default=None, ge=0, le=24 * 60)
 
 
 class BatchOut(BaseModel):
@@ -26,6 +36,8 @@ class BatchOut(BaseModel):
     status: str
     product_name: str | None = None
     oven_label: str | None = None
+    temp_tier: str | None = None
+    preheat_min: int = 0
     ferment_end: int | None = None
     bake_end: int | None = None
     model_config = {"from_attributes": True}
@@ -43,9 +55,10 @@ class GanttBlock(BaseModel):
     code: str
     oven_id: int
     oven_label: str
-    phase: str
+    phase: str  # preheat | ferment | bake
     start_min: int
     end_min: int
+    temp_tier: str | None = None
 
 
 class ConflictOut(BaseModel):

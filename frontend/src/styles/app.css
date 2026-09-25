@@ -286,6 +286,17 @@ select, input, .gantt-deck button, .toolbar button {
   border: 1px solid #f0a060;
   box-shadow: 0 0 8px rgba(217, 121, 65, .35);
 }
+.gantt-block.preheat {
+  background: repeating-linear-gradient(
+    45deg,
+    #3a2c1e 0,
+    #3a2c1e 6px,
+    #54402a 6px,
+    #54402a 12px
+  );
+  border: 1px dashed #c4a88a;
+  color: #ffd9a0;
+}
 .axis {
   display: grid;
   grid-template-columns: 120px 1fr;

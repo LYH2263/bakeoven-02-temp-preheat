@@ -2,16 +2,27 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.api.router import api_router
 from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app.services.seed import seed_if_empty
 
+# create_all 不会给已存在的表补列，这里用幂等 ALTER 兼容旧库
+_MIGRATIONS = [
+    "ALTER TABLE products ADD COLUMN IF NOT EXISTS temp_tier VARCHAR(20) NOT NULL DEFAULT '中温'",
+    "ALTER TABLE ovens ADD COLUMN IF NOT EXISTS preheat_min INTEGER NOT NULL DEFAULT 15",
+    "ALTER TABLE batches ADD COLUMN IF NOT EXISTS preheat_min INTEGER NOT NULL DEFAULT 0",
+]
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        for stmt in _MIGRATIONS:
+            conn.execute(text(stmt))
     if settings.seed_on_empty:
         db = SessionLocal()
         try:

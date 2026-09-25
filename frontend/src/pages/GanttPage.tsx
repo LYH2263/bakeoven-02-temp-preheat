@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
-type Block = { batch_id: number; code: string; oven_id: number; oven_label: string; phase: string; start_min: number; end_min: number };
+type Block = { batch_id: number; code: string; oven_id: number; oven_label: string; phase: string; start_min: number; end_min: number; temp_tier?: string | null };
 const DAY_START = 8 * 60, DAY_END = 18 * 60, SPAN = DAY_END - DAY_START;
+const PHASE_LABEL: Record<string, string> = { preheat: "预", ferment: "酵", bake: "烤" };
+const PHASE_NAME: Record<string, string> = { preheat: "预热", ferment: "发酵", bake: "烘烤" };
 function pct(m: number) { return ((m - DAY_START) / SPAN) * 100; }
 export default function GanttPage() {
   const [blocks, setBlocks] = useState<Block[]>([]);
@@ -25,8 +27,8 @@ export default function GanttPage() {
             {row.blocks.map((b, i) => (
               <div key={i} className={`gantt-block ${b.phase}`}
                 style={{ left: `${pct(b.start_min)}%`, width: `${((b.end_min - b.start_min) / SPAN) * 100}%` }}
-                title={`${b.code} ${b.phase}`}>
-                {b.code}/{b.phase === "ferment" ? "酵" : "烤"}
+                title={`${b.code} ${PHASE_NAME[b.phase] ?? b.phase}${b.temp_tier ? ` · ${b.temp_tier}` : ""}`}>
+                {b.code}/{PHASE_LABEL[b.phase] ?? b.phase}
               </div>
             ))}
           </div>

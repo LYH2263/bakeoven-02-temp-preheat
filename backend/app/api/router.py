@@ -10,7 +10,9 @@ from app.schemas.schemas import (
     ConflictOut,
     GanttBlock,
     OvenOut,
+    OvenUpdate,
     ProductOut,
+    ProductUpdate,
     WindowOut,
 )
 from app.services.oven_engine import (
@@ -18,7 +20,9 @@ from app.services.oven_engine import (
     RecipeDurations,
     build_occupancies,
     find_conflicts,
+    latest_tier_before,
     next_free_window,
+    plan_preheat,
 )
 
 api_router = APIRouter()
@@ -35,8 +39,18 @@ def _all_occupancies(db: Session) -> list[Occupancy]:
         p = db.get(Product, b.product_id)
         if not p:
             continue
-        out.extend(build_occupancies(b.oven_id, b.id, b.start_min, _recipe(p)))
+        out.extend(build_occupancies(b.oven_id, b.id, b.start_min, _recipe(p), b.preheat_min))
     return out
+
+
+def _previous_tier(db: Session, oven_id: int, start_min: int) -> str | None:
+    """Temperature tier of the batch whose occupancy ends latest before start_min."""
+    ends: list[tuple[int, str]] = []
+    for b in db.scalars(select(Batch).where(Batch.oven_id == oven_id)).all():
+        p = db.get(Product, b.product_id)
+        if p:
+            ends.append((b.start_min + p.ferment_min + p.bake_min, p.temp_tier))
+    return latest_tier_before(ends, start_min)
 
 
 def _batch_out(db: Session, b: Batch) -> BatchOut:
@@ -53,6 +67,8 @@ def _batch_out(db: Session, b: Batch) -> BatchOut:
         status=b.status,
         product_name=p.name if p else None,
         oven_label=o.label if o else None,
+        temp_tier=p.temp_tier if p else None,
+        preheat_min=b.preheat_min,
         ferment_end=ferment_end,
         bake_end=bake_end,
     )
@@ -68,9 +84,33 @@ def products(db: Session = Depends(get_db)):
     return db.scalars(select(Product).order_by(Product.id)).all()
 
 
+@api_router.patch("/products/{product_id}", response_model=ProductOut)
+def update_product(product_id: int, body: ProductUpdate, db: Session = Depends(get_db)):
+    product = db.get(Product, product_id)
+    if not product:
+        raise HTTPException(404, "产品不存在")
+    if body.temp_tier is not None:
+        product.temp_tier = body.temp_tier
+    db.commit()
+    db.refresh(product)
+    return product
+
+
 @api_router.get("/ovens", response_model=list[OvenOut])
 def ovens(db: Session = Depends(get_db)):
     return db.scalars(select(Oven).order_by(Oven.id)).all()
+
+
+@api_router.patch("/ovens/{oven_id}", response_model=OvenOut)
+def update_oven(oven_id: int, body: OvenUpdate, db: Session = Depends(get_db)):
+    oven = db.get(Oven, oven_id)
+    if not oven:
+        raise HTTPException(404, "炉位不存在")
+    if body.preheat_min is not None:
+        oven.preheat_min = body.preheat_min
+    db.commit()
+    db.refresh(oven)
+    return oven
 
 
 @api_router.get("/batches", response_model=list[BatchOut])
@@ -86,10 +126,11 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
     if not product or not oven:
         raise HTTPException(404, "产品或炉位不存在")
     recipe = _recipe(product)
-    candidates = build_occupancies(oven.id, -1, body.start_min, recipe)
-    existing = _all_occupancies(db)
-    hits = find_conflicts(existing, candidates)
     code = body.code or f"BO-{body.start_min}"
+    existing = _all_occupancies(db)
+
+    candidates = build_occupancies(oven.id, -1, body.start_min, recipe)
+    hits = find_conflicts(existing, candidates)
     if hits:
         ex, cand = hits[0]
         detail = (
@@ -99,11 +140,31 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
         db.add(ConflictLog(batch_code=code, oven_id=oven.id, detail=detail))
         db.commit()
         raise HTTPException(409, detail)
+
+    # 温度档与炉上紧邻的上一档不同时，占炉前先插入一段预热（同样占炉）
+    preheat_min = 0
+    prev_tier = _previous_tier(db, oven.id, body.start_min)
+    preheat = plan_preheat(prev_tier, product.temp_tier, oven.preheat_min, body.start_min)
+    if preheat is not None:
+        preheat_occ = Occupancy(oven.id, preheat, "preheat", -1)
+        hits = find_conflicts(existing, [preheat_occ])
+        if hits:
+            ex, cand = hits[0]
+            detail = (
+                f"预热冲突：与批次#{ex.batch_id} 的 {ex.phase} 段重叠："
+                f"预热段[{cand.interval.start},{cand.interval.end})"
+            )
+            db.add(ConflictLog(batch_code=code, oven_id=oven.id, detail=detail))
+            db.commit()
+            raise HTTPException(409, detail)
+        preheat_min = oven.preheat_min
+
     batch = Batch(
         product_id=product.id,
         oven_id=oven.id,
         code=code,
         start_min=body.start_min,
+        preheat_min=preheat_min,
     )
     db.add(batch)
     db.commit()
@@ -119,7 +180,7 @@ def gantt(db: Session = Depends(get_db)):
         o = db.get(Oven, b.oven_id)
         if not p or not o:
             continue
-        for occ in build_occupancies(b.oven_id, b.id, b.start_min, _recipe(p)):
+        for occ in build_occupancies(b.oven_id, b.id, b.start_min, _recipe(p), b.preheat_min):
             blocks.append(
                 GanttBlock(
                     batch_id=b.id,
@@ -129,6 +190,7 @@ def gantt(db: Session = Depends(get_db)):
                     phase=occ.phase,
                     start_min=occ.interval.start,
                     end_min=occ.interval.end,
+                    temp_tier=p.temp_tier,
                 )
             )
     return blocks

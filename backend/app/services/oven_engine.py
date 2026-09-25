@@ -1,4 +1,4 @@
-"""Oven scheduling with half-open ferment+bake intervals and next free window."""
+"""Oven scheduling with half-open preheat+ferment+bake intervals and next free window."""
 
 from __future__ import annotations
 
@@ -28,8 +28,35 @@ class RecipeDurations:
 class Occupancy:
     oven_id: int
     interval: Interval
-    phase: str  # ferment | bake
+    phase: str  # preheat | ferment | bake
     batch_id: int
+
+
+def latest_tier_before(ends: list[tuple[int, str]], start_min: int) -> str | None:
+    """Tier of the batch whose occupancy ends latest at or before start_min."""
+    best_end: int | None = None
+    tier: str | None = None
+    for end, t in ends:
+        if end <= start_min and (best_end is None or end > best_end):
+            best_end, tier = end, t
+    return tier
+
+
+def plan_preheat(
+    prev_tier: str | None,
+    new_tier: str,
+    preheat_min: int,
+    start_min: int,
+) -> Interval | None:
+    """Preheat interval to insert before a batch, or None when no tier switch.
+
+    A preheat is needed only when the oven has a previous batch whose
+    temperature tier differs from the new batch's tier. The segment occupies
+    the oven but is neither ferment nor bake.
+    """
+    if preheat_min <= 0 or prev_tier is None or prev_tier == new_tier:
+        return None
+    return Interval(start_min - preheat_min, start_min)
 
 
 def build_occupancies(
@@ -37,13 +64,20 @@ def build_occupancies(
     batch_id: int,
     start_min: int,
     recipe: RecipeDurations,
+    preheat_min: int = 0,
 ) -> list[Occupancy]:
     ferment = Interval(start_min, start_min + recipe.ferment_min)
     bake = Interval(ferment.end, ferment.end + recipe.bake_min)
-    return [
-        Occupancy(oven_id, ferment, "ferment", batch_id),
-        Occupancy(oven_id, bake, "bake", batch_id),
-    ]
+    out: list[Occupancy] = []
+    if preheat_min > 0:
+        out.append(Occupancy(oven_id, Interval(start_min - preheat_min, start_min), "preheat", batch_id))
+    out.extend(
+        [
+            Occupancy(oven_id, ferment, "ferment", batch_id),
+            Occupancy(oven_id, bake, "bake", batch_id),
+        ]
+    )
+    return out
 
 
 def find_conflicts(existing: list[Occupancy], candidates: list[Occupancy]) -> list[tuple[Occupancy, Occupancy]]:
